@@ -2,3 +2,4 @@ streamlit
 pyvis
 networkx
 pandas
+plotly
