@@ -123,48 +123,50 @@ class DatabaseManager:
 
 class SmartFreeTextParser:
     @staticmethod
-    def parse_witness_statement(text: str, default_date: str, current_locs: Dict[str, Location]) -> tuple[List[AtomicFact], Dict[str, Location]]:
+    def parse_bulk_documents(text: str, default_date: str, current_locs: Dict[str, Location], start_id: int = 1) -> tuple[List[AtomicFact], Dict[str, Location]]:
         new_facts = []
         updated_locs = dict(current_locs)
-        lines = [l.strip() for l in text.splitlines() if len(l.strip()) > 5]
+        
+        raw_chunks = re.split(r"(?:\r?\n)+|(?<=[.!?])\s+(?=[А-ЯЁA-Z])", text)
+        chunks = [c.strip() for c in raw_chunks if len(c.strip()) > 5]
 
         time_range_re = re.compile(r"(\d{1,2}[:.]\d{2})\s*(?:-|—|до)\s*(\d{1,2}[:.]\d{2})")
-        single_time_re = re.compile(r"(?:в|около|примерно|после)\s*(\d{1,2}[:.]\d{2})")
+        single_time_re = re.compile(r"(?:в|около|примерно|после|время[:\s]*)\s*(\d{1,2}[:.]\d{2})")
+        names_pool = ["Арман", "Дамир", "Нурлан", "Алихан", "Охранник", "Курьер", "Директор", "Кайрат", "Айбек", "Ерлан", "Марат", "Серик"]
 
-        for idx, line in enumerate(lines, 1):
-            low = line.lower()
+        for idx, chunk in enumerate(chunks, start=start_id):
+            low = chunk.lower()
             
-            if "камер" in low or "видео" in low:
-                src_type, src_id, w, conf, mot = "камера", "Система видеоаналитики", 0.95, 0.0, "Объективная фиксация"
-            elif "биллинг" in low or "телефон" in low or "вышк" in low:
-                src_type, src_id, w, conf, mot = "биллинг", "Телекоммуникационный лог", 0.90, 0.0, "Цифровой след"
-            elif "подозреваем" in low or "я не виновен" in low:
-                src_type, src_id, w, conf, mot = "подозреваемый", "Показания допрашиваемого", 0.35, 0.90, "Мотив алиби"
-            elif "эксперт" in low or "акт" in low:
-                src_type, src_id, w, conf, mot = "экспертиза", "Заключение эксперта", 0.98, 0.0, "Научная экспертиза"
+            if any(k in low for k in ["камер", "видео", "cam-", "запись"]):
+                src_type, src_id, w, conf, mot = "камера", f"Видеокамера #{idx}", 0.95, 0.0, "Объективная видеофиксация"
+            elif any(k in low for k in ["биллинг", "телефон", "вышк", "сотов", "звонок"]):
+                src_type, src_id, w, conf, mot = "биллинг", f"Биллинг #{idx}", 0.90, 0.0, "Цифровой след"
+            elif any(k in low for k in ["турникет", "скуд", "пропуск"]):
+                src_type, src_id, w, conf, mot = "турникет", f"Лог СКУД #{idx}", 0.95, 0.0, "Контроль доступа"
+            elif any(k in low for k in ["подозреваем", "я не был", "я невиновен", "утверждает фигурант"]):
+                src_type, src_id, w, conf, mot = "подозреваемый", "Показания фигуранта", 0.35, 0.90, "Мотив защиты алиби"
             else:
-                src_type, src_id, w, conf, mot = "свидетель", f"Показания очевидца #{idx}", 0.60, 0.25, "Информационное свидетельство"
+                src_type, src_id, w, conf, mot = "свидетель", f"Показания очевидца #{idx}", 0.60, 0.25, "Свидетельские показания"
 
-            range_match = time_range_re.findall(line)
+            range_match = time_range_re.findall(chunk)
             if range_match:
                 t1_raw, t2_raw = range_match[0]
                 t1 = default_date + " " + t1_raw.replace(".", ":").zfill(5)
                 t2 = default_date + " " + t2_raw.replace(".", ":").zfill(5)
             else:
-                s_match = single_time_re.findall(line)
+                s_match = single_time_re.findall(chunk)
                 if s_match:
                     t_val = s_match[0].replace(".", ":").zfill(5)
                     t1 = default_date + " " + t_val
                     h, m = map(int, t_val.split(":"))
-                    m_end = (m + 20) % 60
-                    h_end = h + (m + 20) // 60
+                    m_end = (m + 15) % 60
+                    h_end = h + (m + 15) // 60
                     t2 = default_date + " " + f"{h_end:02d}:{m_end:02d}"
                 else:
                     t1 = default_date + " 14:00"
-                    t2 = default_date + " 14:20"
+                    t2 = default_date + " 14:15"
 
-            names_pool = ["Арман", "Дамир", "Нурлан", "Алихан", "Охранник", "Курьер", "Директор", "Кайрат", "Айбек"]
-            found_subject = "Неустановленный фигурант"
+            found_subject = "Неустановленный субъект"
             for n in names_pool:
                 if n.lower() in low:
                     found_subject = n + " С."
@@ -177,30 +179,30 @@ class SmartFreeTextParser:
                     break
             
             if not matched_loc_name:
-                words = re.findall(r"[А-ЯЁ][а-яё]+", line)
+                words = re.findall(r"[А-ЯЁ][а-яё]{3,}", chunk)
                 candidate = None
                 for w_item in words:
-                    if w_item not in names_pool and len(w_item) > 3:
+                    if w_item not in names_pool:
                         candidate = w_item
                         break
                 if candidate:
                     matched_loc_name = candidate
                     if candidate not in updated_locs:
-                        rx = round(random.uniform(-100.0, 350.0), 1)
-                        ry = round(random.uniform(-100.0, 200.0), 1)
-                        updated_locs[candidate] = Location(candidate, rx, ry, "Автоматически добавленная точка")
+                        rx = round(random.uniform(-80.0, 320.0), 1)
+                        ry = round(random.uniform(-80.0, 180.0), 1)
+                        updated_locs[candidate] = Location(candidate, rx, ry, "Автоматически обнаруженная точка")
                 else:
                     matched_loc_name = list(updated_locs.keys())[0]
 
-            predicate = Predicate.ABSENT.value if ("не был" in low or "отсутств" in low or "не видел" in low) else Predicate.PRESENT.value
+            predicate = Predicate.ABSENT.value if any(neg in low for neg in ["не был", "отсутств", "не видел", "не находился"]) else Predicate.PRESENT.value
 
             new_facts.append(AtomicFact(
-                fact_id=f"NLP-F{idx:02d}",
+                fact_id=f"F-{idx:02d}",
                 source_id=src_id, source_type=src_type,
                 subject=found_subject, predicate=predicate,
                 object_target=None, location_name=matched_loc_name,
                 t_start=t1, t_end=t2, weight=w,
-                source_excerpt=line, motive_flag=mot, interest_conflict=conf
+                source_excerpt=chunk, motive_flag=mot, interest_conflict=conf
             ))
 
         return new_facts, updated_locs
@@ -300,7 +302,7 @@ class ForensicCollisionEngine:
 
 class ScientificValidator:
     @staticmethod
-    def run_ground_truth_benchmark(engine: ForensicCollisionEngine, test_samples: int = 200, anomaly_rate: float = 0.5) -> Dict:
+    def run_ground_truth_benchmark(engine: ForensicCollisionEngine, test_samples: int = 200, anomaly_rate: float = 0.5, add_noise: bool = True) -> Dict:
         locs = {
             "Точка Альфа": Location("Точка Альфа", 0.0, 0.0),
             "Точка Бета": Location("Точка Бета", 400.0, 300.0)
@@ -311,17 +313,19 @@ class ScientificValidator:
         for i in range(test_samples):
             is_anomaly = random.random() < anomaly_rate
             case_time = base_time + timedelta(minutes=i * 20)
+            noise_delta = timedelta(minutes=random.choice([-3, 0, 3])) if add_noise else timedelta(0)
+
             if is_anomaly:
                 col_sub_type = random.choice(["bilocation", "kinematic", "contradiction"])
                 if col_sub_type == "bilocation":
                     f1 = AtomicFact(f"T-{i}-1", "Камера А", "камера", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Альфа", case_time.strftime(TIME_FORMAT), (case_time + timedelta(minutes=15)).strftime(TIME_FORMAT), 0.95, "Лог А")
-                    f2 = AtomicFact(f"T-{i}-2", "Свидетель", "свидетель", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Бета", (case_time + timedelta(minutes=5)).strftime(TIME_FORMAT), (case_time + timedelta(minutes=20)).strftime(TIME_FORMAT), 0.5, "Лог Б")
+                    f2 = AtomicFact(f"T-{i}-2", "Свидетель", "свидетель", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Бета", (case_time + timedelta(minutes=5) + noise_delta).strftime(TIME_FORMAT), (case_time + timedelta(minutes=20)).strftime(TIME_FORMAT), 0.5, "Лог Б")
                 elif col_sub_type == "kinematic":
                     f1 = AtomicFact(f"T-{i}-1", "Камера А", "камера", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Альфа", case_time.strftime(TIME_FORMAT), (case_time + timedelta(minutes=5)).strftime(TIME_FORMAT), 0.95, "Лог А")
                     f2 = AtomicFact(f"T-{i}-2", "Турникет Б", "турникет", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Бета", (case_time + timedelta(minutes=5, seconds=10)).strftime(TIME_FORMAT), (case_time + timedelta(minutes=15)).strftime(TIME_FORMAT), 0.9, "Лог Б")
                 else:
                     f1 = AtomicFact(f"T-{i}-1", "Камера А", "камера", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Альфа", case_time.strftime(TIME_FORMAT), (case_time + timedelta(minutes=15)).strftime(TIME_FORMAT), 0.95, "Лог А")
-                    f2 = AtomicFact(f"T-{i}-2", "Свидетель", "свидетель", f"Субъект_{i}", Predicate.ABSENT.value, None, "Точка Альфа", case_time.strftime(TIME_FORMAT), (case_time + timedelta(minutes=15)).strftime(TIME_FORMAT), 0.6, "Лог А")
+                    f2 = AtomicFact(f"T-{i}-2", "Свидетель", "свидетель", f"Субъект_{i}", Predicate.ABSENT.value, None, "Точка Альфа", (case_time + noise_delta).strftime(TIME_FORMAT), (case_time + timedelta(minutes=15)).strftime(TIME_FORMAT), 0.6, "Лог А")
             else:
                 f1 = AtomicFact(f"T-{i}-1", "Камера А", "камера", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Альфа", case_time.strftime(TIME_FORMAT), (case_time + timedelta(minutes=10)).strftime(TIME_FORMAT), 0.95, "Лог А")
                 f2 = AtomicFact(f"T-{i}-2", "Камера Б", "камера", f"Субъект_{i}", Predicate.PRESENT.value, None, "Точка Бета", (case_time + timedelta(minutes=30)).strftime(TIME_FORMAT), (case_time + timedelta(minutes=45)).strftime(TIME_FORMAT), 0.95, "Лог Б")

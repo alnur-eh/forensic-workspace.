@@ -36,10 +36,10 @@ config = AnalysisConfig(
 )
 
 st.title("🔍 AI Forensic Workspace")
-st.caption("Аналитический комплекс аудита доказательной базы и детекции пространственно-временных коллизий")
+st.caption("Автоматизированный комплекс интеллектуального аудита доказательств и детекции коллизий")
 
-tab_nlp, tab_builder, tab_map2d, tab_graph, tab_analysis, tab_benchmark = st.tabs([
-    "📥 AI-разбор показаний",
+tab_add, tab_registry, tab_map2d, tab_graph, tab_analysis, tab_benchmark = st.tabs([
+    "➕ Добавление материалов",
     "📋 Реестр фактов",
     "🗺️ 2D-Карта (X / Y)",
     "🕸️ Топология связей",
@@ -47,88 +47,133 @@ tab_nlp, tab_builder, tab_map2d, tab_graph, tab_analysis, tab_benchmark = st.tab
     "🔬 Научный бенчмарк"
 ])
 
-with tab_nlp:
-    st.subheader("🗣️ Извлечение фактов из свободной речи свидетелей")
-    sample_text = """Камера видеонаблюдения CAM-305 зафиксировала: Арман находился около Кабинет 305 с 14:15 до 14:25.
-Подозреваемый Арман на допросе утверждает: с 14:00 до 14:40 я находился в Библиотека и никуда не выходил.
-Свидетель Дамир сообщает: я лично встретил Армана около Центральный вход примерно в 14:26.
-Охранник на посту подтвердил: Арман отсутствовал в Библиотека в период с 14:10 до 14:35."""
-
-    raw_input = st.text_area("Свободная речь свидетелей / материалы дела:", value=sample_text, height=160)
+# 1. ВКЛАДКА ДОБАВЛЕНИЯ (ВСЕ 3 СПОСОБА)
+with tab_add:
+    sub1, sub2, sub3 = st.tabs([
+        "⚡ Поштучный ввод текстом",
+        "✍️ Ручной конструктор",
+        "📁 Массовый импорт (файлы/текст)"
+    ])
     
-    if st.button("🤖 Распознать и сохранить в базу"):
-        extracted_facts, updated_locs = SmartFreeTextParser.parse_witness_statement(
-            raw_input, default_date="2026-10-12", current_locs=st.session_state.locations
-        )
-        st.session_state.facts = extracted_facts
-        st.session_state.locations = updated_locs
-        DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
-        st.success(f"Распознано {len(extracted_facts)} фактов! База данных обновлена.")
-        st.rerun()
+    # 1. Поштучный AI-ввод
+    with sub1:
+        st.subheader("Быстрое добавление отдельного показания")
+        st.caption("Введи отдельную фразу очевидца или лог — AI выделит субъект, время, локацию и допишет факт к текущему списку.")
+        single_val = st.text_input("Текст отдельного события:", "Свидетель Айбек сообщил: встретил Армана в Столовая около 14:32.")
+        if st.button("🚀 Распознать и добавить факт"):
+            if single_val.strip():
+                new_f, updated_locs = SmartFreeTextParser.parse_bulk_documents(
+                    single_val, default_date="2026-10-12", current_locs=st.session_state.locations,
+                    start_id=len(st.session_state.facts) + 1
+                )
+                st.session_state.facts.extend(new_f)
+                st.session_state.locations = updated_locs
+                DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
+                st.success(f"Факт успешно добавлен в базу! (Всего фактов: {len(st.session_state.facts)})")
+                st.rerun()
 
-with tab_builder:
-    st.subheader("Реестр материалов дела")
-    with st.form("manual_add"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            f_s = st.text_input("Субъект (ФИО)", "Арман С.")
-            f_p = st.selectbox("Предикат", [p.value for p in Predicate])
-            f_l = st.selectbox("Локация", list(st.session_state.locations.keys()))
-        with c2:
-            f_src = st.text_input("Источник", "Протокол опроса #5")
-            f_type = st.selectbox("Тип источника", ["свидетель", "подозреваемый", "камера", "биллинг", "турникет", "экспертиза"])
-            f_w = st.slider("Вес надежности", 0.1, 1.0, 0.7, 0.05)
-        with c3:
-            f_t1 = st.text_input("Начало", "2026-10-12 14:10")
-            f_t2 = st.text_input("Конец", "2026-10-12 14:25")
-            f_mot = st.text_input("Психологический интерес", "Скрыть факт присутствия")
-            f_conf = st.slider("Конфликт интересов", 0.0, 1.0, 0.3, 0.05)
-        f_quote = st.text_area("Цитата / Содержание", "Находился в указанном месте.")
-        if st.form_submit_button("💾 Сохранить факт"):
-            new_f = AtomicFact(f"F-{len(st.session_state.facts)+1:02d}", f_src, f_type, f_s, f_p, None, f_l, f_t1, f_t2, f_w, f_quote, f_mot, f_conf)
-            st.session_state.facts.append(new_f)
-            DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
-            st.success("Факт сохранен в базу!")
-            st.rerun()
+    # 2. Ручной конструктор
+    with sub2:
+        st.subheader("Ручной ввод с точными параметрами")
+        with st.form("classic_manual_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                f_s = st.text_input("Субъект (ФИО)", "Арман С.")
+                f_p = st.selectbox("Предикат действия", [p.value for p in Predicate])
+                f_l = st.selectbox("Локация", list(st.session_state.locations.keys()))
+            with c2:
+                f_src = st.text_input("Название источника", "Протокол допроса #6")
+                f_type = st.selectbox("Тип источника", ["свидетель", "подозреваемый", "камера", "биллинг", "турникет", "экспертиза"])
+                f_w = st.slider("Вес надежности источника", 0.1, 1.0, 0.65, 0.05)
+            with c3:
+                f_t1 = st.text_input("Время начала", "2026-10-12 14:15")
+                f_t2 = st.text_input("Время окончания", "2026-10-12 14:30")
+                f_mot = st.text_input("Психологический интерес", "Скрыть передвижение")
+                f_conf = st.slider("Конфликт интересов", 0.0, 1.0, 0.35, 0.05)
+            f_quote = st.text_area("Цитата / Выдержка из показаний:", "Находился в указанном месте.")
+            
+            if st.form_submit_button("💾 Сохранить факт вручную"):
+                new_atom = AtomicFact(
+                    f"F-{len(st.session_state.facts)+1:02d}", f_src, f_type, f_s, f_p, None, f_l,
+                    f_t1, f_t2, f_w, f_quote, f_mot, f_conf
+                )
+                st.session_state.facts.append(new_atom)
+                DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
+                st.success("Факт вручную внесен в базу данных!")
+                st.rerun()
 
+    # 3. Массовый импорт
+    with sub3:
+        st.subheader("Пакетная обработка файлов и многостраничных протоколов")
+        up_files = st.file_uploader("Загрузить файлы (.txt, .json, .csv):", type=["txt", "json", "csv"], accept_multiple_files=True)
+        raw_bulk = st.text_area("Или вставьте большой текст нескольких показаний сразу:", height=130, value="")
+        
+        mode = st.radio("Режим добавления:", ["Дописать к существующим фактам", "Очистить базу и записать заново"], horizontal=True)
+        
+        if st.button("⚡ Запустить пакетный AI-разбор"):
+            content_all = raw_bulk
+            if up_files:
+                for uf in up_files:
+                    content_all += "\n" + uf.getvalue().decode("utf-8", errors="ignore")
+            
+            if content_all.strip():
+                start_index = 1 if mode == "Очистить базу и записать заново" else len(st.session_state.facts) + 1
+                bulk_facts, bulk_locs = SmartFreeTextParser.parse_bulk_documents(
+                    content_all, default_date="2026-10-12", current_locs=st.session_state.locations, start_id=start_index
+                )
+                if mode == "Очистить базу и записать заново":
+                    st.session_state.facts = bulk_facts
+                else:
+                    st.session_state.facts.extend(bulk_facts)
+                st.session_state.locations = bulk_locs
+                DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
+                st.success(f"Обработано и внесено {len(bulk_facts)} фактов!")
+                st.rerun()
+
+# 2. РЕЕСТР ФАКТОВ
+with tab_registry:
+    st.subheader("Реестр формализованных материалов дела")
     if st.session_state.facts:
         f_df = pd.DataFrame([{
             "ID": f.fact_id, "Субъект": f.subject, "Действие": f.predicate,
-            "Локация": f.location_name, "Интервал": f"{f.t_start} — {f.t_end}",
-            "Источник": f.source_id, "Вес": f.weight, "Мотив": f.motive_flag
+            "Локация": f.location_name, "Интервал": f"{f.t_start[-5:]} — {f.t_end[-5:]}",
+            "Источник": f.source_id, "Тип": f.source_type, "Вес": f.weight, "Мотив": f.motive_flag
         } for f in st.session_state.facts])
         st.dataframe(f_df, use_container_width=True, hide_index=True)
-        if st.button("🗑️ Очистить все факты"):
+        if st.button("🗑️ Очистить все факты из базы"):
             st.session_state.facts = []
             DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
             st.rerun()
+    else:
+        st.info("База фактов пуста. Добавьте показания на первой вкладке.")
 
+# 3. 2D-КАРТА X/Y
 with tab_map2d:
     st.subheader("🗺️ Двумерная координатная плоскость объекта")
     col_m1, col_m2 = st.columns([1, 2])
     with col_m1:
         st.markdown("**Добавить новую точку:**")
         with st.form("add_loc_form"):
-            n_name = st.text_input("Название локации", "Серверная")
+            n_name = st.text_input("Название", "Серверная")
             n_x = st.number_input("Координата X (метры)", value=60.0)
             n_y = st.number_input("Координата Y (метры)", value=90.0)
-            n_desc = st.text_input("Описание", "Ограниченный доступ")
-            if st.form_submit_button("📍 Поставить на карту"):
+            n_desc = st.text_input("Описание", "Служебное помещение")
+            if st.form_submit_button("📍 Добавить"):
                 st.session_state.locations[n_name] = Location(n_name, n_x, n_y, n_desc)
                 DatabaseManager.save_data(st.session_state.locations, st.session_state.facts)
-                st.success(f"Локация {n_name} добавлена!")
+                st.success(f"Локация {n_name} сохранена!")
                 st.rerun()
 
     with col_m2:
         loc_df = pd.DataFrame([{"Локация": l.name, "X": l.x, "Y": l.y, "Описание": l.description} for l in st.session_state.locations.values()])
         fig = px.scatter(loc_df, x="X", y="Y", text="Локация", hover_data=["Описание"],
-                         title="Карта локаций (координатная сетка в метрах)",
-                         template="plotly_dark")
+                         title="Координатная сетка локаций (в метрах)", template="plotly_dark")
         fig.update_traces(marker=dict(size=14, color="#00E676", line=dict(width=2, color="white")),
                           textposition="top center", textfont=dict(size=13, color="white"))
-        fig.update_layout(xaxis_title="Координата X (метры)", yaxis_title="Координата Y (метры)", height=450)
+        fig.update_layout(xaxis_title="Ось X (метры)", yaxis_title="Ось Y (метры)", height=450)
         st.plotly_chart(fig, use_container_width=True)
 
+# 4. ТОПОЛОГИЯ СВЯЗЕЙ
 with tab_graph:
     st.subheader("🕸️ Сетевой граф связей")
     if st.session_state.facts:
@@ -152,33 +197,36 @@ with tab_graph:
             components.html(f_html.read(), height=500)
         os.remove(tmp_path)
 
+# 5. АНАЛИЗ КОЛЛИЗИЙ
 with tab_analysis:
     st.subheader("🚨 Экспертный протокол коллизий")
     engine = ForensicCollisionEngine(config=config)
     results = engine.analyze(st.session_state.facts, st.session_state.locations)
     
-    st.metric("Обнаружено критических нестыковок", len(results))
+    st.metric("Обнаружено критических коллизий", len(results))
     for item in results:
         with st.expander(f"🚨 [{item['id']}] {item['type']} — {item['subject']}", expanded=True):
             st.write(f"**Суть коллизии:** {item['details']}")
-            st.write(f"**Отношение интервалов:** `{item['allen_relation']}`")
+            st.write(f"**Отношение интервалов Аллена:** `{item['allen_relation']}`")
             st.info(f"🧠 **Оценка мотива и риска лжи:** {item['psychological_insight']}")
             c1, c2 = st.columns(2)
             f1, f2 = item['facts'][0], item['facts'][1]
             with c1:
-                st.error(f"**Факт А ({f1.fact_id})**\n* Источник: `{f1.source_id}` (вес {f1.weight})\n* Утверждение: *{f1.predicate}* в **{f1.location_name}**\n* Время: {f1.t_start} — {f1.t_end}\n* Цитата: *«{f1.source_excerpt}»*")
+                st.error(f"**Факт А ({f1.fact_id})**\n* Источник: `{f1.source_id}` (вес {f1.weight})\n* Утверждение: *{f1.predicate}* в **{f1.location_name}**\n* Время: {f1.t_start[-5:]} — {f1.t_end[-5:]}\n* Цитата: *«{f1.source_excerpt}»*")
             with c2:
-                st.warning(f"**Факт Б ({f2.fact_id})**\n* Источник: `{f2.source_id}` (вес {f2.weight})\n* Утверждение: *{f2.predicate}* в **{f2.location_name}**\n* Время: {f2.t_start} — {f2.t_end}\n* Цитата: *«{f2.source_excerpt}»*")
+                st.warning(f"**Факт Б ({f2.fact_id})**\n* Источник: `{f2.source_id}` (вес {f2.weight})\n* Утверждение: *{f2.predicate}* в **{f2.location_name}**\n* Время: {f2.t_start[-5:]} — {f2.t_end[-5:]}\n* Цитата: *«{f2.source_excerpt}»*")
 
+# 6. НАУЧНЫЙ БЕНЧМАРК
 with tab_benchmark:
     st.subheader("🔬 Экспериментальная валидация точности и скорости")
-    b1, b2 = st.tabs(["🎯 Метрики качества классификатора", "⚡ Временная сложность O(N²)"])
+    b1, b2 = st.tabs(["🎯 Метрики классификатора (с учетом шума показаний)", "⚡ Временная сложность O(N²)"])
     
     with b1:
-        samples = st.selectbox("Количество тестовых дел", [100, 250, 500, 1000], index=1)
-        rate = st.slider("Доля аномалий в выборке", 0.1, 0.9, 0.5, 0.1)
-        if st.button("🚀 Запустить валидацию Ground Truth"):
-            val_res = ScientificValidator.run_ground_truth_benchmark(engine, test_samples=samples, anomaly_rate=rate)
+        samples = st.selectbox("Размер контрольной выборки", [100, 250, 500, 1000], index=1)
+        rate = st.slider("Доля аномалий (коллизий)", 0.1, 0.9, 0.5, 0.1)
+        noise = st.checkbox("Учитывать погрешность свидетельских показаний (±3 мин)", value=True)
+        if st.button("🚀 Провести валидацию Ground Truth"):
+            val_res = ScientificValidator.run_ground_truth_benchmark(engine, test_samples=samples, anomaly_rate=rate, add_noise=noise)
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Точность (Accuracy)", f"{val_res['accuracy']}%")
             m2.metric("Precision", f"{val_res['precision']}%")
@@ -190,7 +238,6 @@ with tab_benchmark:
                 "Факт: Нет коллизии": [f"FP: {val_res['fp']}", f"TN: {val_res['tn']}"]
             }
             st.table(pd.DataFrame(cm_data, index=["Система нашла нестыковку", "Система сочла алиби чистым"]))
-            st.success("Детерминированный интервальный анализ исключает ложные обвинения (FP = 0).")
 
     with b2:
         if st.button("⚡ Запустить нагрузочный тест"):
