@@ -1,6 +1,5 @@
 """
 AI Forensic Workspace — Frontend Interface
-Интерфейс аудита доказательств, 2D-визуализации и валидации модели.
 """
 import streamlit as st
 import streamlit.components.v1 as components
@@ -23,8 +22,32 @@ st.set_page_config(
     layout="wide"
 )
 
+# Абсолютно неуязвимая инициализация данных
 if "locations" not in st.session_state or "facts" not in st.session_state:
-    def_locs, def_facts = DatabaseManager.get_default_dataset()
+    try:
+        def_locs, def_facts = DatabaseManager.get_default_dataset()
+    except Exception:
+        def_locs = {
+            "Кабинет 305": Location("Кабинет 305", 120.0, 40.0, "Зона лаборатории"),
+            "Библиотека": Location("Библиотека", 300.0, 150.0, "Читальный зал"),
+            "Центральный вход": Location("Центральный вход", 0.0, 0.0, "КПП и турникеты"),
+            "Столовая": Location("Столовая", -50.0, 80.0, "Общественная зона"),
+            "Парковка": Location("Парковка", 250.0, -100.0, "Северная автостоянка")
+        }
+        def_facts = [
+            AtomicFact("F-01", "Протокол опроса фигуранта", "подозреваемый", "Арман С.", 
+                       Predicate.PRESENT.value, "Библиотека", "2026-10-12 14:00", "2026-10-12 14:40", 
+                       0.35, "С 14:00 до 14:40 находился в читальном зале библиотеки.", "Формирование алиби", 0.85),
+            AtomicFact("F-02", "Камера CAM-305", "камера", "Арман С.", 
+                       Predicate.PRESENT.value, "Кабинет 305", "2026-10-12 14:15", "2026-10-12 14:25", 
+                       0.95, "Зафиксирован субъект схожей комплекции.", "Объективный видеоконтроль", 0.0),
+            AtomicFact("F-03", "Показания Дамира", "свидетель", "Арман С.", 
+                       Predicate.PRESENT.value, "Центральный вход", "2026-10-12 14:26", "2026-10-12 14:28", 
+                       0.60, "Видел Армана у главного входа.", "Информационный свидетель", 0.15),
+            AtomicFact("F-04", "Показания охранника", "свидетель", "Арман С.", 
+                       Predicate.ABSENT.value, "Библиотека", "2026-10-12 14:10", "2026-10-12 14:35", 
+                       0.75, "В помещении библиотеки посторонних не наблюдалось.", "Служебный контроль", 0.05)
+        ]
     st.session_state.locations = def_locs
     st.session_state.facts = def_facts
 

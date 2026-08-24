@@ -1,7 +1,5 @@
 """
 AI Forensic Workspace — Algorithmic Core
-Математическое ядро интервальной логики Аллена, многоуровневого кинематического анализа
-и контекстной верификации доказательств.
 """
 from __future__ import annotations
 import math
@@ -40,19 +38,10 @@ class CollisionType(str, Enum):
     SOURCE_RELIABILITY = "ДИСБАЛАНС ВЕСОВ КОНФЛИКТУЮЩИХ ИСТОЧНИКОВ"
 
 ALLEN_INVERSES: Dict[str, str] = {
-    "BEFORE": "AFTER",
-    "AFTER": "BEFORE",
-    "MEETS": "MET_BY",
-    "MET_BY": "MEETS",
-    "STARTS": "STARTED_BY",
-    "STARTED_BY": "STARTS",
-    "FINISHES": "FINISHED_BY",
-    "FINISHED_BY": "FINISHES",
-    "DURING": "CONTAINS",
-    "CONTAINS": "DURING",
-    "OVERLAPS": "OVERLAPPED_BY",
-    "OVERLAPPED_BY": "OVERLAPS",
-    "EQUALS": "EQUALS"
+    "BEFORE": "AFTER", "AFTER": "BEFORE", "MEETS": "MET_BY", "MET_BY": "MEETS",
+    "STARTS": "STARTED_BY", "STARTED_BY": "STARTS", "FINISHES": "FINISHED_BY",
+    "FINISHED_BY": "FINISHES", "DURING": "CONTAINS", "CONTAINS": "DURING",
+    "OVERLAPS": "OVERLAPPED_BY", "OVERLAPPED_BY": "OVERLAPS", "EQUALS": "EQUALS"
 }
 
 @dataclass
@@ -119,35 +108,21 @@ def calculate_distance(loc1: Location, loc2: Location) -> Optional[float]:
     return math.hypot(loc1.x - loc2.x, loc1.y - loc2.y)
 
 def get_allen_relation(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> str:
-    """13 интервальных отношений Джеймса Аллена."""
     if start_a > end_a or start_b > end_b:
         return "INVALID"
-    if start_a == start_b and end_a == end_b:
-        return "EQUALS"
-    if end_a < start_b:
-        return "BEFORE"
-    if end_b < start_a:
-        return "AFTER"
-    if end_a == start_b:
-        return "MEETS"
-    if end_b == start_a:
-        return "MET_BY"
-    if start_a == start_b and end_a < end_b:
-        return "STARTS"
-    if start_a == start_b and end_b < end_a:
-        return "STARTED_BY"
-    if end_a == end_b and start_b < start_a:
-        return "FINISHES"
-    if end_a == end_b and start_a < start_b:
-        return "FINISHED_BY"
-    if start_b < start_a and end_a < end_b:
-        return "DURING"
-    if start_a < start_b and end_b < end_a:
-        return "CONTAINS"
-    if start_a < start_b < end_a < end_b:
-        return "OVERLAPS"
-    if start_b < start_a < end_b < end_a:
-        return "OVERLAPPED_BY"
+    if start_a == start_b and end_a == end_b: return "EQUALS"
+    if end_a < start_b: return "BEFORE"
+    if end_b < start_a: return "AFTER"
+    if end_a == start_b: return "MEETS"
+    if end_b == start_a: return "MET_BY"
+    if start_a == start_b and end_a < end_b: return "STARTS"
+    if start_a == start_b and end_b < end_a: return "STARTED_BY"
+    if end_a == end_b and start_b < start_a: return "FINISHES"
+    if end_a == end_b and start_a < start_b: return "FINISHED_BY"
+    if start_b < start_a and end_a < end_b: return "DURING"
+    if start_a < start_b and end_b < end_a: return "CONTAINS"
+    if start_a < start_b < end_a < end_b: return "OVERLAPS"
+    if start_b < start_a < end_b < end_a: return "OVERLAPPED_BY"
     return "UNKNOWN"
 
 class ForensicCollisionEngine:
@@ -182,10 +157,8 @@ class ForensicCollisionEngine:
         loc1 = locations.get(f1.location_name)
         loc2 = locations.get(f2.location_name)
 
-        # Строгое пересечение интервалов ненулевой длительности (без учета касания MEETS при delta_t=0)
         effective_overlap = (eff_start1 < eff_end2) and (eff_start2 < eff_end1)
 
-        # 1. Прямое логическое противоречие в одной локации
         if effective_overlap and loc1 and loc2 and loc1.name == loc2.name:
             if {f1.predicate, f2.predicate} == {Predicate.PRESENT.value, Predicate.ABSENT.value}:
                 results.append({
@@ -199,7 +172,6 @@ class ForensicCollisionEngine:
                     "expert_note": f"Требуется перекрестный допрос. Дельта конфликта интересов: {abs(f1.interest_conflict - f2.interest_conflict):.2f}."
                 })
 
-        # 2. Пространственно-временная несогласованность (Билокация)
         if effective_overlap and loc1 and loc2 and loc1.has_coordinates and loc2.has_coordinates:
             dist = calculate_distance(loc1, loc2)
             if dist is not None and dist > self.config.same_location_radius_m and f1.predicate == Predicate.PRESENT.value and f2.predicate == Predicate.PRESENT.value:
@@ -214,7 +186,6 @@ class ForensicCollisionEngine:
                     "expert_note": "Несогласованность временных меток объективного контроля или свидетельских показаний."
                 })
 
-        # 3. Контекстный дисбаланс весов (только при конфликте утверждений в перекрывающемся окне)
         if effective_overlap and f1.location_name != f2.location_name:
             diff = abs(f1.weight - f2.weight)
             if diff >= self.config.critical_weight_gap:
@@ -231,7 +202,6 @@ class ForensicCollisionEngine:
                     "expert_note": f"Мотивационный интерес источника: {low_src.motive_flag}."
                 })
 
-        # 4. Кинематический многоуровневый анализ
         if loc1 and loc2 and loc1.has_coordinates and loc2.has_coordinates and f1.predicate == Predicate.PRESENT.value and f2.predicate == Predicate.PRESENT.value:
             if eff_end1 <= eff_start2:
                 earlier, later, e_end, l_start = f1, f2, eff_end1, eff_start2
@@ -246,19 +216,17 @@ class ForensicCollisionEngine:
                 if loc_e and loc_l:
                     dist = calculate_distance(loc_e, loc_l)
                     gap_sec = (l_start - e_end).total_seconds()
-                    
                     if dist is not None and dist > self.config.same_location_radius_m:
                         if gap_sec == 0:
-                            # Мгновенная телепортация при нулевом зазоре
                             results.append({
                                 "id": f"COL-KIN-{f1.fact_id}-{f2.fact_id}",
                                 "type": CollisionType.KINEMATIC_CRITICAL.value,
                                 "subject": f1.subject,
                                 "severity": "КРИТИЧЕСКАЯ",
-                                "details": f"Мгновенное перемещение между '{loc_e.name}' и '{loc_l.name}' (дистанция {dist:.1f} м за 0.0 с). Требуемая скорость бесконечна.",
+                                "details": f"Мгновенное перемещение между '{loc_e.name}' и '{loc_l.name}' (дистанция {dist:.1f} м за 0.0 с).",
                                 "allen_relation": "Временной зазор: 0.0 с (MEETS)",
                                 "facts": [f1, f2],
-                                "expert_note": "Физически невозможное мгновенное перемещение между пространственно разделенными объектами."
+                                "expert_note": "Физически невозможное перемещение между пространственно разделенными объектами."
                             })
                         elif gap_sec > 0:
                             speed_kmh = (dist / gap_sec) * 3.6
@@ -268,10 +236,10 @@ class ForensicCollisionEngine:
                                     "type": CollisionType.KINEMATIC_CRITICAL.value,
                                     "subject": f1.subject,
                                     "severity": "КРИТИЧЕСКАЯ",
-                                    "details": f"Расчетная скорость {speed_kmh:.1f} км/ч превышает предельный транспортный порог ({self.config.max_vehicle_speed_kmh:.1f} км/ч). Дистанция: {dist:.1f} м за {gap_sec:.1f} с.",
+                                    "details": f"Расчетная скорость {speed_kmh:.1f} км/ч превышает порог автотранспорта ({self.config.max_vehicle_speed_kmh:.1f} км/ч). Дистанция: {dist:.1f} м за {gap_sec:.1f} с.",
                                     "allen_relation": f"Временной зазор: {gap_sec:.1f} с",
                                     "facts": [f1, f2],
-                                    "expert_note": "Аномальная скорость перемещения. Требуется проверка точности фиксации времени."
+                                    "expert_note": "Аномальная скорость перемещения."
                                 })
                             elif speed_kmh > self.config.max_sprint_speed_kmh:
                                 results.append({
@@ -279,10 +247,10 @@ class ForensicCollisionEngine:
                                     "type": CollisionType.KINEMATIC_VEHICLE_REQUIRED.value,
                                     "subject": f1.subject,
                                     "severity": "ВЫСОКАЯ",
-                                    "details": f"Расчетная скорость {speed_kmh:.1f} км/ч превышает порог бега ({self.config.max_sprint_speed_kmh:.1f} км/ч), но допустима для автотранспорта (дистанция {dist:.1f} м за {gap_sec:.1f} с).",
+                                    "details": f"Расчетная скорость {speed_kmh:.1f} км/ч превышает порог бега ({self.config.max_sprint_speed_kmh:.1f} км/ч), допустима для автотранспорта (дистанция {dist:.1f} м за {gap_sec:.1f} с).",
                                     "allen_relation": f"Временной зазор: {gap_sec:.1f} с",
                                     "facts": [f1, f2],
-                                    "expert_note": "Перемещение пешком исключено. Требуется подтверждение использования транспортного средства."
+                                    "expert_note": "Пешее перемещение исключено. Требуется подтверждение использования автотранспорта."
                                 })
         return results
 
@@ -291,7 +259,6 @@ class SmartFreeTextParser:
     def parse_documents(text: str, default_date: str, current_locs: Dict[str, Location], start_id: int = 1) -> Tuple[List[AtomicFact], Dict[str, Location]]:
         new_facts: List[AtomicFact] = []
         updated_locs = dict(current_locs)
-        
         chunks = [c.strip() for c in re.split(r"(?:\r?\n)+|(?<=[.!?])\s+", text) if len(c.strip()) > 5]
         time_range_re = re.compile(r"(\d{1,2}[:.]\d{2}(?::\d{2})?)\s*(?:-|—|до)\s*(\d{1,2}[:.]\d{2}(?::\d{2})?)")
         single_time_re = re.compile(r"(?:в|около|примерно|после|время[:\s]*)\s*(\d{1,2}[:.]\d{2}(?::\d{2})?)")
@@ -299,7 +266,6 @@ class SmartFreeTextParser:
 
         for idx, chunk in enumerate(chunks, start=start_id):
             low = chunk.lower()
-            
             if any(k in low for k in ["камер", "видео", "cam-", "запись"]):
                 src_type, src_id, w, conf, mot = "камера", f"Видеокамера #{idx}", 0.95, 0.0, "Объективная видеофиксация"
             elif any(k in low for k in ["биллинг", "телефон", "вышк", "сотов"]):
@@ -374,7 +340,6 @@ class ScientificValidator:
         }
         tp, fp, tn, fn = 0, 0, 0, 0
         base_time = datetime(2026, 10, 12, 12, 0, 0)
-
         critical_types = {
             CollisionType.SPATIAL_TEMPORAL.value,
             CollisionType.KINEMATIC_CRITICAL.value,
@@ -446,3 +411,7 @@ class DatabaseManager:
                        0.75, "В помещении библиотеки посторонних не наблюдалось.", "Служебный контроль", 0.05)
         ]
         return locs, facts
+
+    @staticmethod
+    def load_data() -> Tuple[Dict[str, Location], List[AtomicFact]]:
+        return DatabaseManager.get_default_dataset()
