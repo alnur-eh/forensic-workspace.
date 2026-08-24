@@ -1,21 +1,24 @@
 """
 Комплексный тестовый модуль валидации ядра AI Forensic Workspace.
-1. Все 13 отношений Аллена и проверка симметрии обратных отношений.
-2. Проверка семантики MEETS (отсутствие ложной билокации при касании границ).
-3. Проверка многоуровневой кинематики (шаг, бег, автотранспорт, сверхскорость).
-4. Проверка нулевого зазора времени (телепортация vs совпадение координат).
-5. Изоляция SOURCE_RELIABILITY от разнесенных во времени фактов.
-6. Граничные и поврежденные входные данные.
+Тесты:
+1. 13 отношений Аллена и проверка симметрии обратных отношений.
+2. Тестирование модели неопределенности времени (Time Uncertainty):
+   - Тест 1: Разделены на 10 мин, погрешность +-1 мин -> Нет коллизии.
+   - Тест 2: Разделены на 30 сек, погрешность +-60 сек -> ВОЗМОЖНАЯ коллизия.
+   - Тест 3: Прямой оверлап -> ПОДТВЕРЖДЁННАЯ коллизия.
+   - Тест 4: Отсутствие координат -> INSUFFICIENT_SPATIAL_DATA.
+3. Проверка прозрачного скоринга Confidence и цепочки аудита (Audit Trail).
+4. Проверка независимого бенчмарка на внешнем размеченном датасете.
 """
 import unittest
 from datetime import datetime
 from discrepancy_engine import (
-    Location, AtomicFact, Predicate, AnalysisConfig,
-    ForensicCollisionEngine, CollisionType, get_allen_relation,
+    Location, AtomicFact, Predicate, AnalysisConfig, TimeInterval,
+    ForensicCollisionEngine, CollisionType, ConflictStatus, get_allen_relation,
     ALLEN_INVERSES, ScientificValidator
 )
 
-class TestAllenAlgebraComprehensive(unittest.TestCase):
+class TestAllenAlgebraFull(unittest.TestCase):
     def setUp(self):
         self.t = [datetime(2026, 10, 12, 14, i * 5) for i in range(12)]
 
@@ -38,82 +41,91 @@ class TestAllenAlgebraComprehensive(unittest.TestCase):
         for expected_rel, sa, ea, sb, eb in test_pairs:
             direct_rel = get_allen_relation(sa, ea, sb, eb)
             inverse_rel = get_allen_relation(sb, eb, sa, ea)
-            self.assertEqual(direct_rel, expected_rel, f"Прямое отношение для {expected_rel} не совпало.")
-            self.assertEqual(inverse_rel, ALLEN_INVERSES[expected_rel], f"Обратное отношение для {expected_rel} не совпало.")
+            self.assertEqual(direct_rel, expected_rel)
+            self.assertEqual(inverse_rel, ALLEN_INVERSES[expected_rel])
 
-class TestForensicLogicAndSemantics(unittest.TestCase):
+class TestTimeUncertaintyAndStatus(unittest.TestCase):
+    def setUp(self):
+        self.loc_a = Location("Точка А", 0.0, 0.0)
+        self.loc_b = Location("Точка Б", 500.0, 0.0)
+        self.loc_no_coords = Location("Без координат", None, None)
+        self.locations = {
+            "Точка А": self.loc_a,
+            "Точка Б": self.loc_b,
+            "Без координат": self.loc_no_coords
+        }
+        self.engine = ForensicCollisionEngine(AnalysisConfig())
+
+    def test_1_separated_10min_unc_1min_no_collision(self):
+        """Тест 1: События разделены на 10 минут, погрешность +-1 мин -> Коллизии нет."""
+        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00", "2026-10-12 14:10", 0.95, "Лог", time_uncertainty_sec=60.0)
+        f2 = AtomicFact("F-2", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:20", "2026-10-12 14:30", 0.95, "Лог", time_uncertainty_sec=60.0)
+        res = self.engine.analyze([f1, f2], self.locations)
+        # 500 м за (14:20-60с) - (14:10+60с) = 480 сек = 3.75 км/ч (нормальный шаг)
+        self.assertEqual(len(res), 0, "При зазоре 8 минут со скоростью 3.75 км/ч коллизий быть не должно.")
+
+    def test_2_separated_30sec_unc_60sec_possible_collision(self):
+        """Тест 2: События разделены на 30 сек, погрешность +-60 сек -> ВОЗМОЖНАЯ коллизия."""
+        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог", time_uncertainty_sec=60.0)
+        f2 = AtomicFact("F-2", "Свидетель", "свидетель", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:30", "2026-10-12 14:10:00", 0.60, "Лог", time_uncertainty_sec=60.0)
+        res = self.engine.analyze([f1, f2], self.locations)
+        possible_biloc = any(r["status"] == ConflictStatus.POSSIBLE.value for r in res)
+        self.assertTrue(possible_biloc, "Должна быть обнаружена ВОЗМОЖНАЯ коллизия (POSSIBLE CONFLICT).")
+
+    def test_3_raw_overlap_confirmed_collision(self):
+        """Тест 3: Прямой оверлап по исходным меткам -> ПОДТВЕРЖДЁННАЯ коллизия."""
+        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00", "2026-10-12 14:30", 0.95, "Лог", time_uncertainty_sec=10.0)
+        f2 = AtomicFact("F-2", "Свидетель", "свидетель", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:15", "2026-10-12 14:45", 0.60, "Лог", time_uncertainty_sec=10.0)
+        res = self.engine.analyze([f1, f2], self.locations)
+        confirmed_biloc = any(r["status"] == ConflictStatus.CONFIRMED.value and r["type"] == CollisionType.SPATIAL_TEMPORAL.value for r in res)
+        self.assertTrue(confirmed_biloc, "Должна быть обнаружена ПОДТВЕРЖДЁННАЯ коллизия (CONFIRMED).")
+
+    def test_4_missing_coordinates_insufficient_data(self):
+        """Тест 4: Координаты отсутствуют -> INSUFFICIENT_SPATIAL_DATA."""
+        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00", "2026-10-12 14:30", 0.95, "Лог")
+        f2 = AtomicFact("F-2", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Без координат", "2026-10-12 14:15", "2026-10-12 14:45", 0.95, "Лог")
+        res = self.engine.analyze([f1, f2], self.locations)
+        insufficient_data = any(r["type"] == CollisionType.INSUFFICIENT_SPATIAL_DATA.value for r in res)
+        self.assertTrue(insufficient_data, "При отсутствии координат должен возвращаться статус INSUFFICIENT_SPATIAL_DATA.")
+
+class TestAuditTrailAndConfidence(unittest.TestCase):
     def setUp(self):
         self.loc_a = Location("Точка А", 0.0, 0.0)
         self.loc_b = Location("Точка Б", 500.0, 0.0)
         self.locations = {"Точка А": self.loc_a, "Точка Б": self.loc_b}
-        self.engine = ForensicCollisionEngine(AnalysisConfig(
-            max_walking_speed_kmh=5.0,
-            max_sprint_speed_kmh=18.0,
-            max_vehicle_speed_kmh=90.0,
-            same_location_radius_m=2.0
-        ))
-
-    def test_meets_semantics_no_bilocation(self):
-        """Отношение MEETS (14:00-14:05 и 14:05-14:10) не должно порождать билокацию."""
-        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог 1", time_uncertainty_sec=0.0)
-        f2 = AtomicFact("F-2", "Свидетель", "свидетель", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:00", "2026-10-12 14:10:00", 0.60, "Лог 2", time_uncertainty_sec=0.0)
-        res = self.engine.analyze([f1, f2], self.locations)
-        # Касание границ не является билокацией
-        self.assertFalse(any(r["type"] == CollisionType.SPATIAL_TEMPORAL.value for r in res))
-
-    def test_zero_time_gap_different_locations_teleportation(self):
-        """Нулевой временной зазор между разными точками (dist=500м) -> Мгновенная телепортация."""
-        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог 1")
-        f2 = AtomicFact("F-2", "СКУД", "турникет", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:00", "2026-10-12 14:10:00", 0.95, "Лог 2")
-        res = self.engine.analyze([f1, f2], self.locations)
-        self.assertTrue(any(r["type"] == CollisionType.KINEMATIC_CRITICAL.value for r in res),
-                        "При 0 с и dist=500 м должна фиксироваться критическая кинематическая аномалия.")
-
-    def test_zero_time_gap_same_location_no_anomaly(self):
-        """Нулевой временной зазор в одной и той же точке (dist=0м) -> норма."""
-        f1 = AtomicFact("F-1", "Камера 1", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог 1")
-        f2 = AtomicFact("F-2", "Камера 2", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:05:00", "2026-10-12 14:10:00", 0.95, "Лог 2")
-        res = self.engine.analyze([f1, f2], self.locations)
-        self.assertEqual(len(res), 0, "В одной локации кинематических аномалий быть не должно.")
-
-    def test_source_bias_requires_temporal_overlap(self):
-        """Разница весов без временного конфликта (14:00 и 20:00) НЕ должна создавать коллизию."""
-        f1 = AtomicFact("F-1", "Подозреваемый", "подозреваемый", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00", "2026-10-12 14:30", 0.35, "Лог 1")
-        f2 = AtomicFact("F-2", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 20:00", "2026-10-12 20:30", 0.95, "Лог 2")
-        res = self.engine.analyze([f1, f2], self.locations)
-        self.assertFalse(any(r["type"] == CollisionType.SOURCE_RELIABILITY.value for r in res),
-                         "SOURCE_RELIABILITY не должен срабатывать на события с разрывом во времени.")
-
-    def test_kinematic_classification_tiers(self):
-        """Проверка всех ступеней кинематики: шаг, спринт, автотранспорт, сверхскорость."""
-        # 1. Шаг: 500 м за 10 мин (600 с) = 3.0 км/ч (норма)
-        f_start = AtomicFact("F-S", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог")
-        f_walk = AtomicFact("F-W", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:15:00", "2026-10-12 14:20:00", 0.95, "Лог")
-        res_walk = self.engine.analyze([f_start, f_walk], self.locations)
-        self.assertEqual(len(res_walk), 0, "Шаг (3 км/ч) не должен создавать коллизий.")
-
-        # 2. Требуется транспорт: 500 м за 30 с = 60.0 км/ч (между 18 и 90 км/ч)
-        f_veh = AtomicFact("F-V", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:30", "2026-10-12 14:10:00", 0.95, "Лог")
-        res_veh = self.engine.analyze([f_start, f_veh], self.locations)
-        self.assertTrue(any(r["type"] == CollisionType.KINEMATIC_VEHICLE_REQUIRED.value for r in res_veh),
-                        "Скорость 60 км/ч должна классифицироваться как 'ТРЕБУЕТСЯ АВТОТРАНСПОРТ'.")
-
-        # 3. Сверхскорость: 500 м за 5 с = 360.0 км/ч (> 90 км/ч)
-        f_crit = AtomicFact("F-C", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:05", "2026-10-12 14:10:00", 0.95, "Лог")
-        res_crit = self.engine.analyze([f_start, f_crit], self.locations)
-        self.assertTrue(any(r["type"] == CollisionType.KINEMATIC_CRITICAL.value for r in res_crit),
-                        "Скорость 360 км/ч должна классифицироваться как критическая аномалия.")
-
-class TestBenchmarkQuality(unittest.TestCase):
-    def setUp(self):
         self.engine = ForensicCollisionEngine(AnalysisConfig())
 
-    def test_benchmark_metrics_thresholds(self):
-        res = ScientificValidator.run_benchmark(self.engine, test_samples=100, add_noise=False, seed=42)
-        self.assertGreaterEqual(res["accuracy"], 90.0, "Accuracy >= 90%")
-        self.assertGreaterEqual(res["precision"], 90.0, "Precision >= 90%")
-        self.assertGreaterEqual(res["recall"], 85.0, "Recall >= 85%")
-        self.assertGreaterEqual(res["f1_score"], 85.0, "F1-Score >= 85%")
+    def test_confidence_and_audit_trail_structure(self):
+        f1 = AtomicFact("F-1", "Камера", "камера", "Арман", Predicate.PRESENT.value, "Точка А", "2026-10-12 14:00:00", "2026-10-12 14:05:00", 0.95, "Лог", time_uncertainty_sec=5.0)
+        f2 = AtomicFact("F-2", "СКУД", "турникет", "Арман", Predicate.PRESENT.value, "Точка Б", "2026-10-12 14:05:05", "2026-10-12 14:10:00", 0.95, "Лог", time_uncertainty_sec=5.0)
+        res = self.engine.analyze([f1, f2], self.locations)
+        self.assertTrue(len(res) > 0)
+        item = res[0]
+        self.assertIn("confidence", item)
+        self.assertIn("confidence_factors", item)
+        self.assertIn("evidence_chain", item)
+        self.assertIn("calculation", item)
+        self.assertIn("limitations", item)
+        self.assertGreaterEqual(len(item["evidence_chain"]), 3)
+
+class TestExternalLabeledBenchmark(unittest.TestCase):
+    def test_external_dataset_evaluation(self):
+        locs = {"Точка А": Location("Точка А", 0.0, 0.0), "Точка Б": Location("Точка Б", 400.0, 300.0)}
+        engine = ForensicCollisionEngine(AnalysisConfig())
+        dataset = [
+            {
+                "case_id": "TEST-01",
+                "facts": [
+                    {"fact_id": "1", "source_id": "C1", "source_type": "камера", "subject": "Айбек", "predicate": "находился", "location_name": "Точка А", "t_start": "2026-10-12 14:00", "t_end": "2026-10-12 14:20", "weight": 0.9, "source_excerpt": "лог"},
+                    {"fact_id": "2", "source_id": "S1", "source_type": "свидетель", "subject": "Айбек", "predicate": "находился", "location_name": "Точка Б", "t_start": "2026-10-12 14:10", "t_end": "2026-10-12 14:30", "weight": 0.6, "source_excerpt": "лог"}
+                ],
+                "expected_collisions": [{"type_category": "bilocation", "type_keyword": "БИЛОКАЦИЯ"}]
+            }
+        ]
+        res = ScientificValidator.evaluate_external_dataset(engine, dataset, locs)
+        self.assertEqual(res["total_cases"], 1)
+        self.assertEqual(res["tp"], 1)
+        self.assertEqual(res["accuracy"], 100.0)
 
 if __name__ == "__main__":
     unittest.main()

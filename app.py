@@ -1,5 +1,7 @@
 """
 AI Forensic Workspace — Frontend Interface
+Судебно-экспертный интерфейс аудита доказательств, 2D-картографии,
+детального аудиторского следа, внешнего бенчмаркинга и экспорта заключений.
 """
 import streamlit as st
 import streamlit.components.v1 as components
@@ -7,13 +9,15 @@ import pandas as pd
 import time
 import tempfile
 import os
+import json
+from datetime import datetime
 from pyvis.network import Network
 import plotly.express as px
 
 from discrepancy_engine import (
     Location, AtomicFact, Predicate, AnalysisConfig,
     ForensicCollisionEngine, SmartFreeTextParser, ScientificValidator,
-    DatabaseManager, calculate_distance
+    DatabaseManager, ConflictStatus, CollisionType
 )
 
 st.set_page_config(
@@ -22,41 +26,17 @@ st.set_page_config(
     layout="wide"
 )
 
-# Абсолютно неуязвимая инициализация данных
 if "locations" not in st.session_state or "facts" not in st.session_state:
-    try:
-        def_locs, def_facts = DatabaseManager.get_default_dataset()
-    except Exception:
-        def_locs = {
-            "Кабинет 305": Location("Кабинет 305", 120.0, 40.0, "Зона лаборатории"),
-            "Библиотека": Location("Библиотека", 300.0, 150.0, "Читальный зал"),
-            "Центральный вход": Location("Центральный вход", 0.0, 0.0, "КПП и турникеты"),
-            "Столовая": Location("Столовая", -50.0, 80.0, "Общественная зона"),
-            "Парковка": Location("Парковка", 250.0, -100.0, "Северная автостоянка")
-        }
-        def_facts = [
-            AtomicFact("F-01", "Протокол опроса фигуранта", "подозреваемый", "Арман С.", 
-                       Predicate.PRESENT.value, "Библиотека", "2026-10-12 14:00", "2026-10-12 14:40", 
-                       0.35, "С 14:00 до 14:40 находился в читальном зале библиотеки.", "Формирование алиби", 0.85),
-            AtomicFact("F-02", "Камера CAM-305", "камера", "Арман С.", 
-                       Predicate.PRESENT.value, "Кабинет 305", "2026-10-12 14:15", "2026-10-12 14:25", 
-                       0.95, "Зафиксирован субъект схожей комплекции.", "Объективный видеоконтроль", 0.0),
-            AtomicFact("F-03", "Показания Дамира", "свидетель", "Арман С.", 
-                       Predicate.PRESENT.value, "Центральный вход", "2026-10-12 14:26", "2026-10-12 14:28", 
-                       0.60, "Видел Армана у главного входа.", "Информационный свидетель", 0.15),
-            AtomicFact("F-04", "Показания охранника", "свидетель", "Арман С.", 
-                       Predicate.ABSENT.value, "Библиотека", "2026-10-12 14:10", "2026-10-12 14:35", 
-                       0.75, "В помещении библиотеки посторонних не наблюдалось.", "Служебный контроль", 0.05)
-        ]
+    def_locs, def_facts = DatabaseManager.get_default_dataset()
     st.session_state.locations = def_locs
     st.session_state.facts = def_facts
 
-st.sidebar.title("⚙️ Экспертные параметры")
-walk_speed = st.sidebar.slider("Порог скорости шага (км/ч)", 2.0, 8.0, 5.0, 0.5)
-sprint_speed = st.sidebar.slider("Порог скорости бега (км/ч)", 8.0, 30.0, 18.0, 1.0)
-veh_speed = st.sidebar.slider("Макс. скорость транспорта (км/ч)", 40.0, 150.0, 90.0, 5.0)
+st.sidebar.title("⚙️ Экспертные параметры СППР")
+walk_speed = st.sidebar.slider("Норматив скорости шага (км/ч)", 2.0, 8.0, 5.0, 0.5)
+sprint_speed = st.sidebar.slider("Физиологический предел бега (км/ч)", 8.0, 30.0, 18.0, 1.0)
+veh_speed = st.sidebar.slider("Предел скорости транспорта (км/ч)", 40.0, 150.0, 90.0, 5.0)
 radius_same = st.sidebar.slider("Погрешность координат точки (м)", 0.5, 10.0, 2.0, 0.5)
-weight_gap = st.sidebar.slider("Критический дисбаланс весов", 0.1, 0.9, 0.45, 0.05)
+weight_gap = st.sidebar.slider("Порог критического дисбаланса весов", 0.1, 0.9, 0.45, 0.05)
 
 config = AnalysisConfig(
     max_walking_speed_kmh=walk_speed,
@@ -67,17 +47,19 @@ config = AnalysisConfig(
 )
 
 st.title("⚖️ AI Forensic Workspace")
-st.caption("Аналитический комплекс интеллектуального аудита доказательств и детекции коллизий")
+st.caption("Система поддержки принятия решений (СППР) для аудита криминалистической доказательной базы")
 
-tab_add, tab_registry, tab_map2d, tab_graph, tab_analysis, tab_benchmark = st.tabs([
+tab_add, tab_registry, tab_map2d, tab_graph, tab_analysis, tab_benchmark, tab_export = st.tabs([
     "📥 Добавление материалов",
     "📋 Реестр доказательств",
     "🗺️ 2D-Карта (X / Y)",
     "🕸️ Топология связей",
-    "🚨 Экспертиза коллизий",
-    "🔬 Научный бенчмарк"
+    "🚨 Экспертиза & Аудит",
+    "🔬 Научный бенчмарк",
+    "📄 Экспорт заключения"
 ])
 
+# 1. ДОБАВЛЕНИЕ МАТЕРИАЛОВ
 with tab_add:
     sub1, sub2, sub3 = st.tabs([
         "⚡ Поштучный ввод",
@@ -104,7 +86,7 @@ with tab_add:
                 st.rerun()
 
     with sub2:
-        st.markdown("**Параметрический ввод факта:**")
+        st.markdown("**Параметрический ввод факта с оценкой погрешности времени:**")
         with st.form("manual_entry"):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -116,15 +98,16 @@ with tab_add:
                 f_type = st.selectbox("Тип источника", ["свидетель", "подозреваемый", "камера", "биллинг", "турникет"])
                 f_w = st.slider("Вес достоверности", 0.1, 1.0, 0.65, 0.05)
             with c3:
-                f_t1 = st.text_input("Начало", "2026-10-12 14:15")
+                f_t1 = st.text_input("Начало (ГГГГ-ММ-ДД ЧЧ:ММ[:СС])", "2026-10-12 14:15")
                 f_t2 = st.text_input("Окончание", "2026-10-12 14:30")
+                f_unc = st.number_input("Погрешность времени (± сек)", value=60.0, step=10.0)
                 f_mot = st.text_input("Мотивационный профиль", "Нейтральный свидетель")
                 f_conf = st.slider("Конфликт интересов", 0.0, 1.0, 0.2, 0.05)
             f_q = st.text_area("Цитата источника", "Находился в указанном месте.")
             if st.form_submit_button("💾 Сохранить факт"):
                 new_atom = AtomicFact(
                     f"F-{len(st.session_state.facts)+1:02d}", f_src, f_type, f_s, f_p, f_l,
-                    f_t1, f_t2, f_w, f_q, f_mot, f_conf
+                    f_t1, f_t2, f_w, f_q, f_mot, f_conf, f_unc
                 )
                 st.session_state.facts.append(new_atom)
                 st.success("Факт сохранен.")
@@ -162,12 +145,14 @@ with tab_add:
                     st.success(f"Обработано {len(b_facts)} записей.")
                     st.rerun()
 
+# 2. РЕЕСТР ДОКАЗАТЕЛЬСТВ
 with tab_registry:
     st.subheader("Реестр формализованных доказательств")
     if st.session_state.facts:
         f_df = pd.DataFrame([{
             "ID": f.fact_id, "Субъект": f.subject, "Предикат": f.predicate,
             "Локация": f.location_name, "Интервал": f"{f.t_start[-5:] if len(f.t_start) >= 5 else ''} — {f.t_end[-5:] if len(f.t_end) >= 5 else ''}",
+            "Погрешность": f"±{int(f.time_uncertainty_sec)} с",
             "Источник": f.source_id, "Вес": f.weight, "Конфликт": f.interest_conflict
         } for f in st.session_state.facts])
         st.dataframe(f_df, use_container_width=True, hide_index=True)
@@ -177,6 +162,7 @@ with tab_registry:
     else:
         st.info("Реестр пуст.")
 
+# 3. 2D-КАРТА X/Y
 with tab_map2d:
     st.subheader("🗺️ Пространственные координаты локаций")
     col_m1, col_m2 = st.columns([1, 2])
@@ -201,6 +187,7 @@ with tab_map2d:
             fig.update_layout(xaxis_title="Ось X (метры)", yaxis_title="Ось Y (метры)", height=430)
             st.plotly_chart(fig, use_container_width=True)
 
+# 4. ТОПОЛОГИЯ СВЯЗЕЙ
 with tab_graph:
     st.subheader("🕸️ Граф темпоральных связей")
     if st.session_state.facts:
@@ -225,38 +212,77 @@ with tab_graph:
             components.html(f_html.read(), height=480)
         os.remove(tmp_path)
 
+# 5. ЭКСПЕРТИЗА И АУДИТ
 with tab_analysis:
-    st.subheader("🚨 Экспертный протокол выявленных несогласованностей")
+    st.subheader("🚨 Экспертный протокол и цепочка аудита коллизий")
     engine = ForensicCollisionEngine(config=config)
     results = engine.analyze(st.session_state.facts, st.session_state.locations)
     
-    st.metric("Выявлено потенциальных коллизий", len(results))
+    st.metric("Выявлено экспертных находок", len(results))
     for item in results:
-        with st.expander(f"⚠️ [{item['id']}] {item['type']} — {item['subject']}", expanded=True):
-            st.write(f"**Характер несогласованности:** {item['details']}")
-            st.write(f"**Темпоральное отношение Аллена:** `{item['allen_relation']}`")
-            st.info(f"📋 **Рекомендация эксперту:** {item['expert_note']}")
-            c1, c2 = st.columns(2)
-            f1, f2 = item['facts'][0], item['facts'][1]
-            with c1:
-                st.error(f"**Утверждение А ({f1.fact_id})**\n* Источник: `{f1.source_id}` (вес {f1.weight})\n* Предикат: *{f1.predicate}* в **{f1.location_name}**\n* Время: {f1.t_start} — {f1.t_end}\n* Цитата: *«{f1.source_excerpt}»*")
-            with c2:
-                st.warning(f"**Утверждение Б ({f2.fact_id})**\n* Источник: `{f2.source_id}` (вес {f2.weight})\n* Предикат: *{f2.predicate}* в **{f2.location_name}**\n* Время: {f2.t_start} — {f2.t_end}\n* Цитата: *«{f2.source_excerpt}»*")
+        status_color = "🔴" if item.get("status") == ConflictStatus.CONFIRMED.value else ("🟠" if item.get("status") == ConflictStatus.POSSIBLE.value else "🔵")
+        with st.expander(f"{status_color} [{item['id']}] {item['type']} — {item['subject']} | {item.get('status', '')}", expanded=True):
+            
+            c_top1, c_top2 = st.columns([2, 1])
+            with c_top1:
+                st.write(f"**Суть:** {item['details']}")
+                st.write(f"**Темпоральное отношение Аллена:** `{item['allen_relation']}`")
+            with c_top2:
+                st.metric("Достоверность вывода", f"{int(item['confidence']*100)}%", item['confidence_label'])
+                with st.popover("Факторы скоринга"):
+                    for k, v in item.get("confidence_factors", {}).items():
+                        st.write(f"• **{k}**: {v}")
 
+            st.markdown("---")
+            col_d1, col_d2 = st.columns(2)
+            f1, f2 = item['facts'][0], item['facts'][1]
+            with col_d1:
+                st.markdown(f"**Исходные данные: Утверждение А ({f1.fact_id})**")
+                st.write(f"• Источник: `{f1.source_id}` ({f1.source_type}, вес {f1.weight})")
+                st.write(f"• Действие: *{f1.predicate}* в **{f1.location_name}**")
+                st.write(f"• Время: `{f1.t_start}` — `{f1.t_end}` (±{int(f1.time_uncertainty_sec)} с)")
+                st.caption(f"«{f1.source_excerpt}»")
+            with col_d2:
+                st.markdown(f"**Исходные данные: Утверждение Б ({f2.fact_id})**")
+                st.write(f"• Источник: `{f2.source_id}` ({f2.source_type}, вес {f2.weight})")
+                st.write(f"• Действие: *{f2.predicate}* в **{f2.location_name}**")
+                st.write(f"• Время: `{f2.t_start}` — `{f2.t_end}` (±{int(f2.time_uncertainty_sec)} с)")
+                st.caption(f"«{f2.source_excerpt}»")
+
+            st.markdown("---")
+            c_calc, c_chain = st.columns([1, 1])
+            with c_calc:
+                st.markdown("**📊 Математический расчет:**")
+                calc = item.get("calculation", {})
+                for k, v in calc.items():
+                    st.write(f"• **{k}**: `{v}`")
+            with c_chain:
+                st.markdown("**🔗 Цепочка аудита (Audit Trail):**")
+                for step in item.get("evidence_chain", []):
+                    st.markdown(f"↳ *{step}*")
+
+            st.info(f"📋 **Рекомендация эксперту:** {item['expert_note']}")
+            st.warning(f"⚠️ **Ограничения вывода (Forensic Disclaimer):** {item.get('limitations', 'Вывод зависит от исходных данных.')}")
+
+# 6. НАУЧНЫЙ БЕНЧМАРК
 with tab_benchmark:
-    st.subheader("🔬 Экспериментальная валидация точности и масштабируемости")
-    b1, b2 = st.tabs(["🎯 Метрики классификации (Ground Truth)", "⚡ Сложность алгоритма O(N²)"])
-    
-    with b1:
+    st.subheader("🔬 Экспериментальная валидация СППР")
+    b_synth, b_ext = st.tabs([
+        "🧪 Синтетическая валидация (Algorithmic Consistency)",
+        "📁 Внешний размеченный датасет (External Ground Truth)"
+    ])
+
+    with b_synth:
+        st.caption("Оценка математической согласованности алгоритмов на сгенерированных контрольных сценариях.")
         col_bn1, col_bn2 = st.columns([1, 2])
         with col_bn1:
-            samples = st.selectbox("Размер контрольной выборки", [100, 250, 500, 1000], index=1)
-            rate = st.slider("Доля аномалий в датасете", 0.1, 0.9, 0.5, 0.1)
-            noise = st.checkbox("Учитывать погрешность очевидцев (±4 мин)", value=True)
-            run_btn = st.button("🚀 Провести валидацию")
+            samples = st.selectbox("Размер выборки", [100, 250, 500, 1000], index=1)
+            rate = st.slider("Доля аномалий в выборке", 0.1, 0.9, 0.5, 0.1)
+            noise = st.checkbox("Учитывать шум свидетельских показаний", value=True)
+            run_btn = st.button("🚀 Запустить синтетический тест")
         
         if run_btn:
-            val_res = ScientificValidator.run_benchmark(engine, test_samples=samples, anomaly_rate=rate, add_noise=noise)
+            val_res = ScientificValidator.run_synthetic_benchmark(engine, test_samples=samples, anomaly_rate=rate, add_noise=noise)
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Точность (Accuracy)", f"{val_res['accuracy']}%")
             m2.metric("Precision", f"{val_res['precision']}%")
@@ -267,20 +293,139 @@ with tab_benchmark:
                 "Факт: Есть коллизия": [f"TP: {val_res['tp']}", f"FN: {val_res['fn']}"],
                 "Факт: Нет коллизии": [f"FP: {val_res['fp']}", f"TN: {val_res['tn']}"]
             }
-            st.table(pd.DataFrame(cm_data, index=["Система нашла коллизию", "Система сочла алиби согласованным"]))
+            st.table(pd.DataFrame(cm_data, index=["Система нашла коллизию", "Система сочла алиби чистым"]))
+            st.info(f"ℹ️ **Дисклеймер:** {val_res['disclaimer']}")
 
-    with b2:
-        if st.button("⚡ Замерить скорость O(N²)"):
-            counts = [10, 50, 100, 250, 500, 1000]
-            times = []
-            test_loc = list(st.session_state.locations.values())[0]
-            for n in counts:
-                synth = [AtomicFact(f"S-{i}", f"Камера #{i%10}", "камера", f"Субъект_{i%4}",
-                                   Predicate.PRESENT.value, test_loc.name, 
-                                   "2026-10-12 14:00", "2026-10-12 14:30", 1.0, "Лог") for i in range(n)]
-                t0 = time.perf_counter()
-                engine.analyze(synth, st.session_state.locations)
-                times.append((time.perf_counter() - t0) * 1000)
-            res_df = pd.DataFrame({"Объем фактов (N)": counts, "Время анализа (мс)": times})
-            st.line_chart(res_df.set_index("Объем фактов (N)"))
-            st.success(f"1000 фактов обработано за {times[-1]:.2f} мс.")
+    with b_ext:
+        st.caption("Оценка точности на реальном / внешнем независимом размеченном JSON-датасете.")
+        sample_ext = [
+            {
+                "case_id": "CASE-GT-01",
+                "facts": [
+                    {"fact_id": "F1", "source_id": "Камера А", "source_type": "камера", "subject": "Арман С.", "predicate": "находился", "location_name": "Кабинет 305", "t_start": "2026-10-12 14:15", "t_end": "2026-10-12 14:25", "weight": 0.95, "source_excerpt": "лог", "time_uncertainty_sec": 10.0},
+                    {"fact_id": "F2", "source_id": "Свидетель", "source_type": "свидетель", "subject": "Арман С.", "predicate": "находился", "location_name": "Библиотека", "t_start": "2026-10-12 14:15", "t_end": "2026-10-12 14:30", "weight": 0.60, "source_excerpt": "лог", "time_uncertainty_sec": 60.0}
+                ],
+                "expected_collisions": [{"type_category": "bilocation", "type_keyword": "БИЛОКАЦИЯ"}]
+            }
+        ]
+        st.download_button("📥 Скачать пример эталонного JSON", data=json.dumps(sample_ext, ensure_ascii=False, indent=2), file_name="sample_ground_truth.json", mime="application/json")
+        ext_file = st.file_uploader("Загрузить размеченный файл Ground Truth (.json):", type=["json"])
+        if ext_file and st.button("📊 Рассчитать метрики по внешнему датасету"):
+            try:
+                ds = json.loads(ext_file.getvalue().decode("utf-8"))
+                ext_metrics = ScientificValidator.evaluate_external_dataset(engine, ds, st.session_state.locations)
+                
+                c_em1, c_em2, c_em3, c_em4 = st.columns(4)
+                c_em1.metric("Тестовых дел", ext_metrics["total_cases"])
+                c_em2.metric("Precision", f"{ext_metrics['precision']}%")
+                c_em3.metric("Recall", f"{ext_metrics['recall']}%")
+                c_em4.metric("F1-Score", f"{ext_metrics['f1_score']}%")
+
+                st.markdown("**Разбивка детекции по типам коллизий:**")
+                tb_df = pd.DataFrame(ext_metrics["type_breakdown"]).T
+                st.dataframe(tb_df, use_container_width=True)
+            except Exception as e:
+                st.error(f"Ошибка парсинга JSON: {e}")
+
+# 7. ЭКСПОРТ ЗАКЛЮЧЕНИЯ
+with tab_export:
+    st.subheader("📄 Генерация экспертного криминалистического отчета")
+    st.markdown("Экспорт результатов аудита доказательной базы в стандартизированных форматах.")
+    
+    report_data = {
+        "case_metadata": {
+            "case_id": "EXP-RNKP-2026-08",
+            "analysis_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "engine_version": "AI-Forensic-Core v2.4",
+            "parameters": {
+                "max_walking_speed_kmh": config.max_walking_speed_kmh,
+                "max_sprint_speed_kmh": config.max_sprint_speed_kmh,
+                "max_vehicle_speed_kmh": config.max_vehicle_speed_kmh,
+                "same_location_radius_m": config.same_location_radius_m,
+                "critical_weight_gap": config.critical_weight_gap
+            }
+        },
+        "facts_summary": [
+            {
+                "id": f.fact_id, "subject": f.subject, "predicate": f.predicate,
+                "location": f.location_name, "interval": f"{f.t_start} — {f.t_end}",
+                "uncertainty_sec": f.time_uncertainty_sec, "weight": f.weight
+            } for f in st.session_state.facts
+        ],
+        "findings": [
+            {
+                "id": r["id"], "type": r["type"], "status": r.get("status"),
+                "confidence": r["confidence"], "confidence_label": r["confidence_label"],
+                "confidence_factors": r.get("confidence_factors"),
+                "allen_relation": r["allen_relation"],
+                "evidence_chain": r.get("evidence_chain"),
+                "calculation": r.get("calculation"),
+                "limitations": r.get("limitations")
+            } for r in results
+        ]
+    }
+
+    c_exp1, c_exp2 = st.columns(2)
+    with c_exp1:
+        st.download_button(
+            "📥 Скачать отчет в формате JSON",
+            data=json.dumps(report_data, ensure_ascii=False, indent=2),
+            file_name=f"Forensic_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
+    with c_exp2:
+        # Генерация профессионального HTML
+        html_report = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Экспертное заключение СППР</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; color: #111; }}
+h1 {{ border-bottom: 2px solid #222; padding-bottom: 8px; }}
+h2 {{ color: #1565C0; margin-top: 30px; }}
+table {{ width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }}
+th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
+th {{ background: #f0f4f8; }}
+.finding {{ border: 1px solid #ddd; background: #fafafa; padding: 15px; margin-bottom: 15px; border-radius: 4px; }}
+.confirmed {{ border-left: 6px solid #d32f2f; }}
+.possible {{ border-left: 6px solid #f57c00; }}
+.badge {{ display: inline-block; padding: 3px 8px; border-radius: 3px; font-weight: bold; font-size: 11px; }}
+.chain {{ background: #fff; border: 1px solid #eee; padding: 10px; font-family: monospace; font-size: 12px; }}
+</style>
+</head>
+<body>
+<h1>ЭКСПЕРТНЫЙ АУДИТ ДОКАЗАТЕЛЬСТВ</h1>
+<p><strong>Дело:</strong> {report_data['case_metadata']['case_id']} | <strong>Дата анализа:</strong> {report_data['case_metadata']['analysis_timestamp']}</p>
+<p><strong>Параметры модели:</strong> Пешком &le; {config.max_walking_speed_kmh} км/ч, Бег &le; {config.max_sprint_speed_kmh} км/ч, Транспорт &le; {config.max_vehicle_speed_kmh} км/ч</p>
+
+<h2>1. Реестр формализованных доказательств ({len(report_data['facts_summary'])})</h2>
+<table>
+<tr><th>ID</th><th>Субъект</th><th>Предикат</th><th>Локация</th><th>Интервал</th><th>Погрешность</th><th>Вес</th></tr>
+{''.join([f"<tr><td>{f['id']}</td><td>{f['subject']}</td><td>{f['predicate']}</td><td>{f['location']}</td><td>{f['interval']}</td><td>&plusmn;{int(f['uncertainty_sec'])} с</td><td>{f['weight']}</td></tr>" for f in report_data['facts_summary']])}
+</table>
+
+<h2>2. Выявленные пространственно-временные коллизии ({len(report_data['findings'])})</h2>
+{''.join([f"""
+<div class="finding {'confirmed' if f.get('status')=='ПОДТВЕРЖДЁННАЯ' else 'possible'}">
+<h3>[{f['id']}] {f['type']} — {f.get('status', '')}</h3>
+<p><strong>Достоверность вывода:</strong> {int(f['confidence']*100)}% ({f['confidence_label']}) | <strong>Отношение Аллена:</strong> {f['allen_relation']}</p>
+<div class="chain">
+<strong>Цепочка рассуждений (Audit Trail):</strong><br>
+{'<br>↳ '.join(f.get('evidence_chain', []))}
+</div>
+<p style="margin-top:10px; font-size:12px; color:#555;"><strong>Ограничения:</strong> {f.get('limitations')}</p>
+</div>
+""" for f in report_data['findings']])}
+
+<h2>3. Заключительное положение</h2>
+<p style="font-size:12px; color:#666;">Настоящее экспертное заключение сформировано в автоматизированном режиме системой поддержки принятия решений на основе строгих математических интервальных и кинематических алгоритмов. Документ носит рекомендательный характер для следственных органов.</p>
+</body>
+</html>
+"""
+        st.download_button(
+            "📥 Скачать официальный отчет HTML (готов к печати/PDF)",
+            data=html_report,
+            file_name=f"Forensic_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+            mime="text/html"
+        )
